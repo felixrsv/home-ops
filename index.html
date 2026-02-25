@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Home Ops: Felix & Hua</title>
+    <title>Home Ops: F & H</title>
     <style>
         body { font-family: system-ui, -apple-system, sans-serif; padding: 10px; background: #f0f2f5; color: #333; max-width: 1200px; margin: auto; }
         .controls { background: white; padding: 15px; border-radius: 8px; margin-bottom: 20px; display: flex; flex-wrap: wrap; gap: 15px; align-items: center; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
@@ -41,4 +41,122 @@
 <div id="dashboard"></div>
 
 <script>
-    const USERS =
+    const USERS = ['H', 'F'];
+    const TASKS = [
+        { name: "Morning Lead", cat: "Childcare" },
+        { name: "Meal Planning", cat: "Childcare" },
+        { name: "Evening Lead", cat: "Childcare", routine: true },
+        { name: "Bath & Sleep", cat: "Childcare", routine: true },
+        { name: "Overnight", cat: "Childcare" },
+        { name: "Plants", cat: "House" },
+        { name: "Garbage", cat: "House" },
+        { name: "Recycling", cat: "House" },
+        { name: "Laundry", cat: "House" },
+        { name: "Washrooms", cat: "House", deepable: true },
+        { name: "Kitchen & Balcony", cat: "House", deepable: true },
+        { name: "Cat & Guest Rooms", cat: "House", deepable: true },
+        { name: "Dining & Landing", cat: "House", deepable: true }
+    ];
+
+    let state = JSON.parse(localStorage.getItem('homeOps_State')) || {};
+    let season = localStorage.getItem('homeOps_Season') || 'cold';
+    document.getElementById('seasonSelect').value = season;
+
+    function getAutoValue(dateStr, taskName) {
+        const d = new Date(dateStr);
+        const dayNum = d.getDay(); 
+        const dateSeed = Math.floor(d.getTime() / 86400000); 
+
+        const leadUser = USERS[dateSeed % 2];
+        const supportUser = USERS[(dateSeed + 1) % 2];
+        const task = TASKS.find(t => t.name === taskName);
+
+        // Childcare logic: Lead takes routine and morning
+        if (task.cat === "Childcare") {
+            if (task.routine || task.name === "Morning Lead") return leadUser;
+            if (task.name === "Overnight") return supportUser;
+            return leadUser;
+        }
+
+        // House logic: Assigned to support person to balance the lead's day
+        if (taskName === "Laundry") return ([1, 3, 5].includes(dayNum)) ? supportUser : "";
+        if (taskName === "Garbage") {
+            const gDays = [1, 2, 4, 5, 6];
+            return gDays.includes(dayNum) ? supportUser : "";
+        }
+        if (taskName === "Recycling") return (dayNum === 6) ? supportUser : "";
+        if (taskName === "Plants") {
+            if (season === 'hot') return supportUser;
+            return (dateSeed % 2 === 0) ? supportUser : "";
+        }
+
+        // Cleaning logic: Alternates Deep Clean (-D)
+        if (task.deepable) {
+            const isDeepDay = (dateSeed % 4 < 2);
+            return isDeepDay ? `${supportUser}-D` : supportUser;
+        }
+        return "";
+    }
+
+    function render() {
+        const container = document.getElementById('dashboard');
+        container.innerHTML = '';
+        const start = new Date();
+        start.setDate(start.getDate() - 1); // Start T-1
+
+        const table = document.createElement('table');
+        let thead = `<thead><tr><th class="row-label">TASK</th>`;
+        const dates = [];
+        for(let i=0; i<14; i++) {
+            const d = new Date(start); d.setDate(start.getDate() + i);
+            const dStr = d.toISOString().split('T')[0];
+            dates.push(dStr);
+            thead += `<th>${d.toLocaleDateString('en-US', {weekday: 'short'})}<br>${d.toLocaleDateString('en-US', {month: 'short', day: 'numeric'})}</th>`;
+        }
+        table.innerHTML = thead + `</tr></thead>`;
+
+        const tbody = document.createElement('tbody');
+        let currentCat = '';
+
+        TASKS.forEach(task => {
+            if (task.cat !== currentCat) {
+                tbody.innerHTML += `<tr><td colspan="15" class="section-head">${task.cat}</td></tr>`;
+                currentCat = task.cat;
+            }
+            let row = `<tr><td class="row-label">${task.name}</td>`;
+            dates.forEach(dStr => {
+                const key = `${dStr}_${task.name}`;
+                const val = (state[key] !== undefined) ? state[key] : getAutoValue(dStr, task.name);
+                const css = val ? `cell-${val.replace('-D', '-D')}` : 'cell-empty';
+                row += `<td class="${css}" onclick="toggle('${key}', '${dStr}', '${task.name}')">${val}</td>`;
+            });
+            tbody.innerHTML += row + `</tr>`;
+        });
+        table.appendChild(tbody);
+        container.appendChild(table);
+    }
+
+    function toggle(key, dStr, tName) {
+        const current = (state[key] !== undefined) ? state[key] : getAutoValue(dStr, tName);
+        const cycle = ["", "H", "F", "H-D", "F-D"];
+        state[key] = cycle[(cycle.indexOf(current) + 1) % cycle.length];
+        localStorage.setItem('homeOps_State', JSON.stringify(state));
+        render();
+    }
+
+    function updateSeason() {
+        season = document.getElementById('seasonSelect').value;
+        localStorage.setItem('homeOps_Season', season);
+        render();
+    }
+
+    function resetData() {
+        if(confirm("Clear all overrides?")) {
+            state = {}; localStorage.removeItem('homeOps_State'); render();
+        }
+    }
+
+    render();
+</script>
+</body>
+</html>
