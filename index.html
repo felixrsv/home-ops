@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Home Ops: Felix & Hua</title>
+    <style>
+        body { font-family: system-ui, -apple-system, sans-serif; padding: 10px; background: #f0f2f5; color: #333; max-width: 1200px; margin: auto; }
+        .controls { background: white; padding: 15px; border-radius: 8px; margin-bottom: 20px; display: flex; flex-wrap: wrap; gap: 15px; align-items: center; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .week-container { background: white; padding: 10px; margin-bottom: 20px; border-radius: 8px; overflow-x: auto; border: 1px solid #ddd; }
+        h2 { margin: 5px 0 10px 5px; font-size: 1.1em; color: #555; }
+        table { width: 100%; border-collapse: collapse; min-width: 800px; }
+        th, td { border: 1px solid #eee; padding: 10px 5px; text-align: center; cursor: pointer; transition: 0.2s; }
+        th { background: #333; color: white; font-size: 0.7em; }
+        .row-label { text-align: left; font-weight: bold; width: 160px; background: #f8f9fa; cursor: default; font-size: 0.85em; }
+        .section-head { background: #e9ecef !important; font-weight: bold; text-align: left; padding-left: 10px; font-size: 0.75em; color: #495057; }
+        
+        /* Cell States */
+        .cell-H { background-color: #d1ecf1 !important; color: #0c5460; font-weight: bold; }
+        .cell-F { background-color: #fff3cd !important; color: #856404; font-weight: bold; }
+        .cell-D { background-color: #f8d7da !important; color: #721c24; font-weight: bold; } /* Deep Clean */
+        .cell-empty { color: #eee; }
+        
+        button { padding: 8px 12px; border-radius: 5px; border: 1px solid #ccc; cursor: pointer; background: white; }
+        select { padding: 5px; border-radius: 4px; }
+    </style>
+</head>
+<body>
+
+<div class="controls">
+    <div>
+        <strong>Season:</strong> 
+        <select id="seasonSelect" onchange="updateSeason()">
+            <option value="cold">Cold (Water 2nd Day)</option>
+            <option value="hot">Hot (Water Daily)</option>
+        </select>
+    </div>
+    <button onclick="window.print()">🖨️ Print</button>
+    <button onclick="resetData()" style="color: red;">Reset History</button>
+    <small>Window: T-1 to T+12</small>
+</div>
+
+<div id="dashboard"></div>
+
+<script>
+    const USERS = ['H', 'F'];
+    const TASKS = [
+        { name: "Morning Lead", cat: "Childcare" },
+        { name: "Meal Planning", cat: "Childcare" },
+        { name: "Evening Lead", cat: "Childcare", routine: true },
+        { name: "Bath & Sleep", cat: "Childcare", routine: true },
+        { name: "Overnight", cat: "Childcare" },
+        { name: "Plants", cat: "House" },
+        { name: "Garbage", cat: "House" },
+        { name: "Recycling", cat: "House" },
+        { name: "Laundry", cat: "House" },
+        { name: "Washrooms", cat: "House", deepable: true },
+        { name: "Kitchen & Balcony", cat: "House", deepable: true },
+        { name: "Cat & Guest Rooms", cat: "House", deepable: true },
+        { name: "Dining & Landing", cat: "House", deepable: true }
+    ];
+
+    let state = JSON.parse(localStorage.getItem('homeOps_State')) || {};
+    let season = localStorage.getItem('homeOps_Season') || 'cold';
+    document.getElementById('seasonSelect').value = season;
+
+    function getAutoValue(dateStr, taskName) {
+        const d = new Date(dateStr);
+        const dayNum = d.getDay(); // 0=Sun, 1=Mon...
+        const dateSeed = Math.floor(d.getTime() / 86400000); // Unique day ID
+
+        // Alternate logic based on day count
+        const primaryUser = USERS[dateSeed % 2];
+        const secondaryUser = USERS[(dateSeed + 1) % 2];
+
+        const task = TASKS.find(t => t.name === taskName);
+
+        // --- CHILDCARE LOGIC ---
+        if (task.cat === "Childcare") {
+            if (task.routine) return primaryUser; // Linked Lead/Bath
+            if (task.name === "Overnight") return secondaryUser; // Help the other person
+            return primaryUser;
+        }
+
+        // --- HOUSE LOGIC ---
+        if (taskName === "Laundry") {
+            return ([1, 3, 5].includes(dayNum)) ? secondaryUser : ""; 
+        }
+
+        if (taskName === "Garbage") {
+            const garbageDays = [1, 2, 4, 5, 6];
+            return garbageDays.includes(dayNum) ? primaryUser : "";
+        }
+
+        if (taskName === "Recycling") return (dayNum === 6) ? secondaryUser : "";
+
+        if (taskName === "Plants") {
+            if (season === 'hot') return primaryUser;
+            return (dateSeed % 2 === 0) ? primaryUser : "";
+        }
+
+        if (task.deepable) {
+            // Alternate Deep Clean (D) vs Light Clean (H/F)
+            const isDeepDay = (dateSeed % 4 < 2); 
+            return isDeepDay ? "D" : secondaryUser;
+        }
+
+        return "";
+    }
+
+    function render() {
+        const container = document.getElementById('dashboard');
+        container.innerHTML = '';
+        
+        // Window: Start from yesterday (T-1)
+        const start = new Date();
+        start.setDate(start.getDate() - 1);
+
+        const table = document.createElement('table');
+        let thead = `<thead><tr><th class="row-label">TASK</th>`;
+        
+        const dates = [];
+        for(let i=0; i<14; i++) {
+            const d = new Date(start);
+            d.setDate(start.getDate() + i);
+            const dStr = d.toISOString().split('T')[0];
+            dates.push(dStr);
+            thead += `<th>${d.toLocaleDateString('en-US', {weekday: 'short'})}<br>${d.toLocaleDateString('en-US', {month: 'short', day: 'numeric'})}</th>`;
+        }
+        table.innerHTML = thead + `</tr></thead>`;
+
+        const tbody = document.createElement('tbody');
+        let currentCat = '';
+
+        TASKS.forEach(task => {
+            if (task.cat !== currentCat) {
+                tbody.innerHTML += `<tr><td colspan="15" class="section-head">${task.cat}</td></tr>`;
+                currentCat = task.cat;
+            }
+            
+            let row = `<tr><td class="row-label">${task.name}</td>`;
+            dates.forEach(dStr => {
+                const key = `${dStr}_${task.name}`;
+                const val = state[key] || getAutoValue(dStr, task.name);
+                const css = val ? `cell-${val}` : 'cell-empty';
+                row += `<td class="${css}" onclick="toggle('${key}')">${val}</td>`;
+            });
+            tbody.innerHTML += row + `</tr>`;
+        });
+
+        table.appendChild(tbody);
+        container.appendChild(table);
+    }
+
+    function toggle(key) {
+        const current = state[key] || getAutoValue(key.split('_')[0], key.split('_')[1]);
+        const cycle = ["", "H", "F", "D"];
+        let nextIdx = (cycle.indexOf(current) + 1) % cycle.length;
+        state[key] = cycle[nextIdx];
+        localStorage.setItem('homeOps_State', JSON.stringify(state));
+        render();
+    }
+
+    function updateSeason() {
+        season = document.getElementById('seasonSelect').value;
+        localStorage.setItem('homeOps_Season', season);
+        render();
+    }
+
+    function resetData() {
+        if(confirm("Clear manual overrides?")) {
+            state = {};
+            localStorage.removeItem('homeOps_State');
+            render();
+        }
+    }
+
+    render();
+</script>
+</body>
+</html>
