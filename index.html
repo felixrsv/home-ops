@@ -26,11 +26,10 @@
     <strong>Season:</strong> 
     <select id="seasonSelect" onchange="updateSeason()">
         <option value="cold">Cold</option>
-        <option value="hot">Hot</option>
+        <option value="hot">Hot (Plants Daily)</option>
     </select>
     <button onclick="window.print()">🖨️ Print</button>
     <button onclick="resetData()" style="color: red; border-color: #ffcccc;">Reset All</button>
-    <small style="margin-left: auto; color: #666;">Rolling Window: Yesterday (T-1) to +12 Days</small>
 </div>
 
 <div id="dashboard"></div>
@@ -67,6 +66,17 @@
         return null;
     }
 
+    // New check to see if we already planned this in the current visible window
+    function isAlreadyScheduledSoon(date, taskName) {
+        for (let i = 1; i <= 2; i++) {
+            let d = new Date(date);
+            d.setDate(d.getDate() + i);
+            let dStr = d.toISOString().split('T')[0];
+            if (state[`${dStr}_${taskName}`]) return true;
+        }
+        return false;
+    }
+
     function getAutoValue(dateStr, taskName) {
         const d = new Date(dateStr);
         const dayNum = d.getDay();
@@ -75,44 +85,39 @@
         const userB = USERS[(dateSeed + 1) % 2];
         const task = TASKS.find(t => t.name === taskName);
 
-        // CHILDCARE: Strictly alternating
         if (task.cat === "Childcare") {
             if (taskName === "Evening Lead" || taskName === "Bath & Sleep") return userB;
             return userA; 
         }
 
-        // INITIAL RESET LOGIC: If no history exists, use a staggered day-of-week seed
         const hasHistory = Object.keys(state).length > 0;
         if (!hasHistory) {
             if (task.room) {
-                // Stagger room deep cleans so they don't all hit on Day 1
                 const roomIndex = TASKS.filter(t => t.room).findIndex(t => t.name === taskName);
                 if (dayNum % 7 === roomIndex) return `${userB}-D`;
                 return "";
             }
-            if (task.freq > 0) return (dayNum % (task.freq + 1) === 0) ? userB : "";
+            if (task.freq > 0) return (dayNum % (task.freq + 2) === 0) ? userB : "";
         }
 
-        // SMART ROOM LOGIC: Deep clean every 4 days, Simple clean every 2
+        // Forward-Looking Buffer: Don't double up if scheduled tomorrow
+        if (isAlreadyScheduledSoon(d, taskName)) return "";
+
         if (task.room) {
             const hist = getHistory(d, taskName, 7);
-            // If no deep clean in 4 days -> Deep
             if (!hist || (hist.val.includes('-D') && hist.age > 4)) return `${userB}-D`;
-            // If was deep cleaned but no touch in 2 days -> Simple
             if (hist && hist.val.includes('-D') && hist.age >= 2) {
-                const recentAny = getHistory(d, taskName, 1);
-                if (!recentAny) return userB;
+                if (!getHistory(d, taskName, 1)) return userB;
             }
             return "";
         }
 
-        // HOUSE CHORES: Frequency based
         let targetFreq = task.freq;
         if (taskName === "Plants" && season === "hot") targetFreq = 0;
         
         const hist = getHistory(d, taskName, 7);
         if (!hist || hist.age > targetFreq) {
-            if (taskName === "Garbage" && [0, 3].includes(dayNum)) return ""; // Taiwan Sun/Wed no garbage
+            if (taskName === "Garbage" && [0, 3].includes(dayNum)) return "";
             return userB;
         }
 
@@ -124,10 +129,9 @@
         container.innerHTML = '';
         const start = new Date();
         start.setDate(start.getDate() - 1); 
-
+        const dates = [];
         const table = document.createElement('table');
         let thead = `<thead><tr><th class="row-label">TASK</th>`;
-        const dates = [];
         for(let i=0; i<14; i++) {
             const d = new Date(start); d.setDate(start.getDate() + i);
             const dStr = d.toISOString().split('T')[0];
@@ -135,10 +139,8 @@
             thead += `<th>${d.toLocaleDateString('en-US', {weekday: 'short'})}<br>${d.toLocaleDateString('en-US', {month: 'short', day: 'numeric'})}</th>`;
         }
         table.innerHTML = thead + `</tr></thead>`;
-
         const tbody = document.createElement('tbody');
         let currentCat = '';
-
         TASKS.forEach(task => {
             if (task.cat !== currentCat) {
                 tbody.innerHTML += `<tr><td colspan="15" class="section-head">${task.cat}</td></tr>`;
@@ -172,7 +174,7 @@
     }
 
     function resetData() {
-        if(confirm("Reset history? This will use a staggered start for the first few days.")) {
+        if(confirm("Reset history?")) {
             state = {}; localStorage.removeItem('homeOps_State'); render();
         }
     }
