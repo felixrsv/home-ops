@@ -7,11 +7,10 @@
     <style>
         body { font-family: system-ui, -apple-system, sans-serif; padding: 10px; background: #f0f2f5; color: #333; max-width: 1200px; margin: auto; }
         .controls { background: white; padding: 15px; border-radius: 8px; margin-bottom: 20px; display: flex; flex-wrap: wrap; gap: 15px; align-items: center; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
-        .week-container { background: white; padding: 10px; margin-bottom: 20px; border-radius: 8px; overflow-x: auto; border: 1px solid #ddd; }
-        table { width: 100%; border-collapse: collapse; min-width: 800px; }
+        table { width: 100%; border-collapse: collapse; min-width: 800px; background: white; }
         th, td { border: 1px solid #eee; padding: 10px 5px; text-align: center; cursor: pointer; transition: 0.2s; font-size: 0.85em; }
-        th { background: #333; color: white; font-size: 0.7em; }
-        .row-label { text-align: left; font-weight: bold; width: 160px; background: #f8f9fa; cursor: default; font-size: 0.8em; }
+        th { background: #333; color: white; font-size: 0.75em; }
+        .row-label { text-align: left; font-weight: bold; width: 160px; background: #f8f9fa; cursor: default; }
         .section-head { background: #e9ecef !important; font-weight: bold; text-align: left; padding-left: 10px; font-size: 0.7em; color: #495057; text-transform: uppercase; }
         
         .cell-H { background-color: #d1ecf1 !important; color: #0c5460; font-weight: bold; }
@@ -21,7 +20,6 @@
         .cell-empty { color: #eee; }
         
         button { padding: 8px 12px; border-radius: 5px; border: 1px solid #ccc; cursor: pointer; background: white; }
-        select { padding: 5px; border-radius: 4px; }
     </style>
 </head>
 <body>
@@ -34,7 +32,7 @@
     </select>
     <button onclick="window.print()">🖨️ Print</button>
     <button onclick="resetData()" style="color: red; border-color: #ffcccc;">Reset All</button>
-    <small style="margin-left: auto; color: #666;">Rolling Window: Yesterday (T-1) to +12 Days</small>
+    <small style="margin-left: auto; color: #666;">T-1 to +12 Days</small>
 </div>
 
 <div id="dashboard"></div>
@@ -51,51 +49,45 @@
         { name: "Garbage", cat: "House" },
         { name: "Recycling", cat: "House" },
         { name: "Laundry", cat: "House" },
-        { name: "Washrooms", cat: "House", deepable: true },
-        { name: "Kitchen & Balcony", cat: "House", deepable: true },
-        { name: "Cat & Guest Rooms", cat: "House", deepable: true },
-        { name: "Dining & Landing", cat: "House", deepable: true }
+        { name: "Washrooms", cat: "House", schedule: { 1: "D", 4: "S" } }, // Mon: Deep, Thu: Simple
+        { name: "Kitchen & Balcony", cat: "House", schedule: { 2: "D", 5: "S" } }, // Tue: Deep, Fri: Simple
+        { name: "Cat & Guest Rooms", cat: "House", schedule: { 1: "S", 4: "D" } }, // Mon: Simple, Thu: Deep
+        { name: "Dining & Landing", cat: "House", schedule: { 2: "S", 5: "D" } }  // Tue: Simple, Fri: Deep
     ];
 
     let state = JSON.parse(localStorage.getItem('homeOps_State')) || {};
     let season = localStorage.getItem('homeOps_Season') || 'cold';
-    document.getElementById('seasonSelect').value = season;
 
     function getAutoValue(dateStr, taskName) {
         const d = new Date(dateStr);
         const dayNum = d.getDay(); 
         const dateSeed = Math.floor(d.getTime() / 86400000); 
 
-        // Split-Shift Logic
         const userA = USERS[dateSeed % 2];
         const userB = USERS[(dateSeed + 1) % 2];
+        const task = TASKS.find(t => t.name === taskName);
 
-        // CHILDCARE: Balanced intraday shifts
-        if (taskName === "Morning Lead" || taskName === "Meal Planning" || taskName === "Overnight") {
-            return userA; // Person A handles the start and end of the "day"
-        }
-        if (taskName === "Evening Lead" || taskName === "Bath & Sleep") {
-            return userB; // Person B takes the evening handover
+        // CHILDCARE: Balanced shifts
+        if (task.cat === "Childcare") {
+            if (taskName === "Evening Lead" || taskName === "Bath & Sleep") return userB;
+            return userA; 
         }
 
-        // HOUSE: Balancing against childcare leads
+        // HOUSE: Balancing
         if (taskName === "Laundry") return ([1, 3, 5].includes(dayNum)) ? userA : "";
-        if (taskName === "Garbage") {
-            const gDays = [1, 2, 4, 5, 6];
-            return gDays.includes(dayNum) ? userB : "";
-        }
+        if (taskName === "Garbage") return ([1, 2, 4, 5, 6].includes(dayNum)) ? userB : "";
         if (taskName === "Recycling") return (dayNum === 6) ? userA : "";
         if (taskName === "Plants") {
-            if (season === 'hot') return userB;
-            return (dateSeed % 2 === 0) ? userB : "";
+            const isPlantDay = (season === 'hot') ? true : (dateSeed % 2 === 0);
+            return isPlantDay ? userB : "";
         }
 
-        // CLEANING: Alternates deep clean based on user shifts
-        const task = TASKS.find(t => t.name === taskName);
-        if (task && task.deepable) {
-            const isDeepDay = (dateSeed % 4 < 2);
-            return isDeepDay ? `${userA}-D` : userB;
+        // NEW ROOM LOGIC: Blank-based rotation
+        if (task.schedule && task.schedule[dayNum]) {
+            const type = task.schedule[dayNum];
+            return (type === "D") ? `${userB}-D` : userB;
         }
+
         return "";
     }
 
@@ -152,7 +144,7 @@
     }
 
     function resetData() {
-        if(confirm("Clear all overrides?")) {
+        if(confirm("Clear overrides?")) {
             state = {}; localStorage.removeItem('homeOps_State'); render();
         }
     }
