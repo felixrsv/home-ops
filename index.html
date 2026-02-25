@@ -12,13 +12,11 @@
         th { background: #333; color: white; font-size: 0.75em; }
         .row-label { text-align: left; font-weight: bold; width: 160px; background: #f8f9fa; cursor: default; }
         .section-head { background: #e9ecef !important; font-weight: bold; text-align: left; padding-left: 10px; font-size: 0.7em; color: #495057; text-transform: uppercase; }
-        
         .cell-H { background-color: #d1ecf1 !important; color: #0c5460; font-weight: bold; }
         .cell-F { background-color: #fff3cd !important; color: #856404; font-weight: bold; }
         .cell-H-D { background-color: #bee5eb !important; color: #0c5460; font-weight: 900; border: 2px solid #0c5460 !important; }
         .cell-F-D { background-color: #ffeeba !important; color: #856404; font-weight: 900; border: 2px solid #856404 !important; }
         .cell-empty { color: #eee; }
-        
         button { padding: 8px 12px; border-radius: 5px; border: 1px solid #ccc; cursor: pointer; background: white; }
     </style>
 </head>
@@ -32,7 +30,7 @@
     </select>
     <button onclick="window.print()">🖨️ Print</button>
     <button onclick="resetData()" style="color: red; border-color: #ffcccc;">Reset All</button>
-    <small style="margin-left: auto; color: #666;">T-1 to +12 Days</small>
+    <small style="margin-left: auto; color: #666;">Smart History-Aware Window (T-1 to +12)</small>
 </div>
 
 <div id="dashboard"></div>
@@ -40,52 +38,65 @@
 <script>
     const USERS = ['H', 'F'];
     const TASKS = [
-        { name: "Morning Lead", cat: "Childcare" },
-        { name: "Meal Planning", cat: "Childcare" },
-        { name: "Evening Lead", cat: "Childcare", routine: true },
-        { name: "Bath & Sleep", cat: "Childcare", routine: true },
-        { name: "Overnight", cat: "Childcare" },
-        { name: "Plants", cat: "House" },
-        { name: "Garbage", cat: "House" },
-        { name: "Recycling", cat: "House" },
-        { name: "Laundry", cat: "House" },
-        { name: "Washrooms", cat: "House", schedule: { 1: "D", 4: "S" } }, // Mon: Deep, Thu: Simple
-        { name: "Kitchen & Balcony", cat: "House", schedule: { 2: "D", 5: "S" } }, // Tue: Deep, Fri: Simple
-        { name: "Cat & Guest Rooms", cat: "House", schedule: { 1: "S", 4: "D" } }, // Mon: Simple, Thu: Deep
-        { name: "Dining & Landing", cat: "House", schedule: { 2: "S", 5: "D" } }  // Tue: Simple, Fri: Deep
+        { name: "Morning Lead", cat: "Childcare", freq: 0 },
+        { name: "Meal Planning", cat: "Childcare", freq: 0 },
+        { name: "Evening Lead", cat: "Childcare", freq: 0 },
+        { name: "Bath & Sleep", cat: "Childcare", freq: 0 },
+        { name: "Overnight", cat: "Childcare", freq: 0 },
+        { name: "Plants", cat: "House", freq: 2 }, 
+        { name: "Garbage", cat: "House", freq: 1 },
+        { name: "Recycling", cat: "House", freq: 6 },
+        { name: "Laundry", cat: "House", freq: 2 },
+        { name: "Washrooms", cat: "House", room: true },
+        { name: "Kitchen & Balcony", cat: "House", room: true },
+        { name: "Cat & Guest Rooms", cat: "House", room: true },
+        { name: "Dining & Landing", cat: "House", room: true }
     ];
 
     let state = JSON.parse(localStorage.getItem('homeOps_State')) || {};
     let season = localStorage.getItem('homeOps_Season') || 'cold';
 
+    function getHistory(date, taskName, daysBack) {
+        for (let i = 1; i <= daysBack; i++) {
+            let d = new Date(date);
+            d.setDate(d.getDate() - i);
+            let dStr = d.toISOString().split('T')[0];
+            let val = state[`${dStr}_${taskName}`];
+            if (val && val !== "") return { val, age: i };
+        }
+        return null;
+    }
+
     function getAutoValue(dateStr, taskName) {
         const d = new Date(dateStr);
-        const dayNum = d.getDay(); 
-        const dateSeed = Math.floor(d.getTime() / 86400000); 
-
+        const dateSeed = Math.floor(d.getTime() / 86400000);
         const userA = USERS[dateSeed % 2];
         const userB = USERS[(dateSeed + 1) % 2];
         const task = TASKS.find(t => t.name === taskName);
 
-        // CHILDCARE: Balanced shifts
+        // CHILDCARE: Strictly alternating morning/evening shifts
         if (task.cat === "Childcare") {
             if (taskName === "Evening Lead" || taskName === "Bath & Sleep") return userB;
             return userA; 
         }
 
-        // HOUSE: Balancing
-        if (taskName === "Laundry") return ([1, 3, 5].includes(dayNum)) ? userA : "";
-        if (taskName === "Garbage") return ([1, 2, 4, 5, 6].includes(dayNum)) ? userB : "";
-        if (taskName === "Recycling") return (dayNum === 6) ? userA : "";
-        if (taskName === "Plants") {
-            const isPlantDay = (season === 'hot') ? true : (dateSeed % 2 === 0);
-            return isPlantDay ? userB : "";
+        // ROOM LOGIC: Deep clean every 4 days, Simple clean every 2
+        if (task.room) {
+            const hist = getHistory(d, taskName, 7);
+            if (!hist || hist.val.includes('-D') && hist.age > 4) return `${userB}-D`;
+            if (hist && hist.val.includes('-D') && hist.age >= 2 && getHistory(d, taskName, 2) === null) return userB;
+            return "";
         }
 
-        // NEW ROOM LOGIC: Blank-based rotation
-        if (task.schedule && task.schedule[dayNum]) {
-            const type = task.schedule[dayNum];
-            return (type === "D") ? `${userB}-D` : userB;
+        // HOUSE CHORES: Frequency based
+        let targetFreq = task.freq;
+        if (taskName === "Plants" && season === "hot") targetFreq = 0; // Daily in summer
+        
+        const hist = getHistory(d, taskName, 7);
+        if (!hist || hist.age > targetFreq) {
+            // Garbage schedule constraint (Taiwan)
+            if (taskName === "Garbage" && [0, 3].includes(d.getDay())) return "";
+            return userB;
         }
 
         return "";
@@ -144,11 +155,10 @@
     }
 
     function resetData() {
-        if(confirm("Clear overrides?")) {
+        if(confirm("Reset history?")) {
             state = {}; localStorage.removeItem('homeOps_State'); render();
         }
     }
-
     render();
 </script>
 </body>
