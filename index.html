@@ -7,15 +7,13 @@
     <style>
         body { font-family: system-ui, -apple-system, sans-serif; padding: 10px; background: #f0f2f5; color: #333; max-width: 1200px; margin: auto; }
         .controls { background: white; padding: 15px; border-radius: 8px; margin-bottom: 20px; display: flex; flex-wrap: wrap; gap: 15px; align-items: center; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
-        table { width: 100%; border-collapse: collapse; min-width: 800px; background: white; }
+        table { width: 100%; border-collapse: collapse; min-width: 800px; background: white; border-radius: 8px; overflow: hidden; }
         th, td { border: 1px solid #eee; padding: 10px 5px; text-align: center; cursor: pointer; transition: 0.2s; font-size: 0.85em; }
         th { background: #333; color: white; font-size: 0.75em; }
         .row-label { text-align: left; font-weight: bold; width: 160px; background: #f8f9fa; cursor: default; }
         .section-head { background: #e9ecef !important; font-weight: bold; text-align: left; padding-left: 10px; font-size: 0.7em; color: #495057; text-transform: uppercase; }
         .cell-H { background-color: #d1ecf1 !important; color: #0c5460; font-weight: bold; }
         .cell-F { background-color: #fff3cd !important; color: #856404; font-weight: bold; }
-        .cell-H-D { background-color: #bee5eb !important; color: #0c5460; font-weight: 900; border: 2px solid #0c5460 !important; }
-        .cell-F-D { background-color: #ffeeba !important; color: #856404; font-weight: 900; border: 2px solid #856404 !important; }
         .cell-empty { color: #eee; }
         button { padding: 8px 12px; border-radius: 5px; border: 1px solid #ccc; cursor: pointer; background: white; }
     </style>
@@ -25,7 +23,7 @@
 <div class="controls">
     <strong>Season:</strong> 
     <select id="seasonSelect" onchange="updateSeason()">
-        <option value="cold">Cold</option>
+        <option value="cold">Cold (Plants Every 2 Days)</option>
         <option value="hot">Hot (Plants Daily)</option>
     </select>
     <button onclick="window.print()">🖨️ Print</button>
@@ -35,93 +33,69 @@
 <div id="dashboard"></div>
 
 <script>
+    // --- EDITABLE CONFIGURATION ---
     const USERS = ['H', 'F'];
     const TASKS = [
-        { name: "Morning Lead", cat: "Childcare", freq: 0 },
-        { name: "Meal Planning", cat: "Childcare", freq: 0 },
-        { name: "Evening Lead", cat: "Childcare", freq: 0 },
-        { name: "Bath & Sleep", cat: "Childcare", freq: 0 },
-        { name: "Overnight", cat: "Childcare", freq: 0 },
-        { name: "Plants", cat: "House", freq: 1 }, 
-        { name: "Garbage", cat: "House", freq: 1 },
-        { name: "Recycling", cat: "House", freq: 6 },
-        { name: "Laundry", cat: "House", freq: 2 },
-        { name: "Washrooms", cat: "House", room: true },
-        { name: "Kitchen & Balcony", cat: "House", room: true },
-        { name: "Cat & Guest Rooms", cat: "House", room: true },
-        { name: "Dining & Landing", cat: "House", room: true }
+        { name: "Morning Lead", cat: "Childcare", type: "split", shift: "lead" },
+        { name: "Meal Planning", cat: "Childcare", type: "split", shift: "lead" },
+        { name: "Evening Lead", cat: "Childcare", type: "split", shift: "support" },
+        { name: "Bath & Sleep", cat: "Childcare", type: "split", shift: "support" },
+        { name: "Overnight", cat: "Childcare", type: "split", shift: "lead" },
+        
+        { name: "Plants", cat: "House", type: "freq", gap: 1, skipDays: [] }, 
+        { name: "Garbage & Recycling", cat: "House", type: "freq", gap: 1, skipDays: [0, 3] }, // Sun=0, Wed=3
+        { name: "Laundry", cat: "House", type: "freq", gap: 2, skipDays: [0, 6] },
+        
+        { name: "Washrooms", cat: "House", type: "freq", gap: 2, skipDays: [0, 6] },
+        { name: "Kitchen & Balcony", cat: "House", type: "freq", gap: 2, skipDays: [0, 6] },
+        { name: "Cat & Guest Rooms", cat: "House", type: "freq", gap: 4, skipDays: [0, 6] },
+        { name: "Dining & Landing", cat: "House", type: "freq", gap: 3, skipDays: [0, 6] }
     ];
 
     let state = JSON.parse(localStorage.getItem('homeOps_State')) || {};
     let season = localStorage.getItem('homeOps_Season') || 'cold';
+    document.getElementById('seasonSelect').value = season;
 
-    function getHistory(date, taskName, daysBack) {
-        for (let i = 1; i <= daysBack; i++) {
-            let d = new Date(date);
-            d.setDate(d.getDate() - i);
-            let dStr = d.toISOString().split('T')[0];
-            let val = state[`${dStr}_${taskName}`];
-            if (val && val !== "") return { val, age: i };
-        }
-        return null;
-    }
-
-    // New check to see if we already planned this in the current visible window
-    function isAlreadyScheduledSoon(date, taskName) {
-        for (let i = 1; i <= 2; i++) {
-            let d = new Date(date);
-            d.setDate(d.getDate() + i);
-            let dStr = d.toISOString().split('T')[0];
-            if (state[`${dStr}_${taskName}`]) return true;
-        }
-        return false;
-    }
-
-    function getAutoValue(dateStr, taskName) {
-        const d = new Date(dateStr);
+    // --- STEP 1: IDENTIFY IF DUE ---
+    function isTaskDue(d, task) {
         const dayNum = d.getDay();
+        const dStr = d.toISOString().split('T')[0];
+
+        // Hard Skip Rules
+        if (task.skipDays && task.skipDays.includes(dayNum)) return false;
+
+        // Seasonal Logic for Plants
+        if (task.name === "Plants" && season === "hot") return true;
+
+        // History Lookback
+        const lookbackLimit = 10;
+        for (let i = 1; i <= lookbackLimit; i++) {
+            let prev = new Date(d);
+            prev.setDate(d.getDate() - i);
+            let prevStr = prev.toISOString().split('T')[0];
+            if (state[`${prevStr}_${task.name}`]) {
+                return i > task.gap; // Due if gap exceeded
+            }
+        }
+
+        // Default for new history (Staggered Start)
         const dateSeed = Math.floor(d.getTime() / 86400000);
-        const userA = USERS[dateSeed % 2];
-        const userB = USERS[(dateSeed + 1) % 2];
-        const task = TASKS.find(t => t.name === taskName);
+        const taskIdx = TASKS.indexOf(task);
+        return (dateSeed + taskIdx) % (task.gap + 1) === 0;
+    }
+
+    // --- STEP 2: IDENTIFY USER ---
+    function getAutoUser(d, task) {
+        const dateSeed = Math.floor(d.getTime() / 86400000);
+        const leadUser = USERS[dateSeed % 2];
+        const supportUser = USERS[(dateSeed + 1) % 2];
 
         if (task.cat === "Childcare") {
-            if (taskName === "Evening Lead" || taskName === "Bath & Sleep") return userB;
-            return userA; 
+            return (task.shift === "lead") ? leadUser : supportUser;
         }
 
-        const hasHistory = Object.keys(state).length > 0;
-        if (!hasHistory) {
-            if (task.room) {
-                const roomIndex = TASKS.filter(t => t.room).findIndex(t => t.name === taskName);
-                if (dayNum % 7 === roomIndex) return `${userB}-D`;
-                return "";
-            }
-            if (task.freq > 0) return (dayNum % (task.freq + 2) === 0) ? userB : "";
-        }
-
-        // Forward-Looking Buffer: Don't double up if scheduled tomorrow
-        if (isAlreadyScheduledSoon(d, taskName)) return "";
-
-        if (task.room) {
-            const hist = getHistory(d, taskName, 7);
-            if (!hist || (hist.val.includes('-D') && hist.age > 4)) return `${userB}-D`;
-            if (hist && hist.val.includes('-D') && hist.age >= 2) {
-                if (!getHistory(d, taskName, 1)) return userB;
-            }
-            return "";
-        }
-
-        let targetFreq = task.freq;
-        if (taskName === "Plants" && season === "hot") targetFreq = 0;
-        
-        const hist = getHistory(d, taskName, 7);
-        if (!hist || hist.age > targetFreq) {
-            if (taskName === "Garbage" && [0, 3].includes(dayNum)) return "";
-            return userB;
-        }
-
-        return "";
+        // House tasks go to the person not handling the morning shift (supportUser)
+        return supportUser;
     }
 
     function render() {
@@ -129,9 +103,10 @@
         container.innerHTML = '';
         const start = new Date();
         start.setDate(start.getDate() - 1); 
-        const dates = [];
+
         const table = document.createElement('table');
         let thead = `<thead><tr><th class="row-label">TASK</th>`;
+        const dates = [];
         for(let i=0; i<14; i++) {
             const d = new Date(start); d.setDate(start.getDate() + i);
             const dStr = d.toISOString().split('T')[0];
@@ -139,19 +114,31 @@
             thead += `<th>${d.toLocaleDateString('en-US', {weekday: 'short'})}<br>${d.toLocaleDateString('en-US', {month: 'short', day: 'numeric'})}</th>`;
         }
         table.innerHTML = thead + `</tr></thead>`;
+
         const tbody = document.createElement('tbody');
         let currentCat = '';
+
         TASKS.forEach(task => {
             if (task.cat !== currentCat) {
                 tbody.innerHTML += `<tr><td colspan="15" class="section-head">${task.cat}</td></tr>`;
                 currentCat = task.cat;
             }
             let row = `<tr><td class="row-label">${task.name}</td>`;
-            dates.forEach(dStr => {
+            dates.forEach((dStr, idx) => {
                 const key = `${dStr}_${task.name}`;
-                const val = (state[key] !== undefined) ? state[key] : getAutoValue(dStr, task.name);
-                const css = val ? `cell-${val.replace('-D', '-D')}` : 'cell-empty';
-                row += `<td class="${css}" onclick="toggle('${key}', '${dStr}', '${task.name}')">${val}</td>`;
+                const d = new Date(dStr);
+                
+                let val = state[key];
+                if (val === undefined) {
+                    if (task.type === "split") {
+                        val = getAutoUser(d, task);
+                    } else {
+                        val = isTaskDue(d, task) ? getAutoUser(d, task) : "";
+                    }
+                }
+
+                const css = val ? `cell-${val}` : 'cell-empty';
+                row += `<td class="${css}" onclick="toggle('${key}')">${val}</td>`;
             });
             tbody.innerHTML += row + `</tr>`;
         });
@@ -159,9 +146,9 @@
         container.appendChild(table);
     }
 
-    function toggle(key, dStr, tName) {
-        const current = (state[key] !== undefined) ? state[key] : getAutoValue(dStr, tName);
-        const cycle = ["", "H", "F", "H-D", "F-D"];
+    function toggle(key) {
+        const current = state[key] || "";
+        const cycle = ["", "H", "F"];
         state[key] = cycle[(cycle.indexOf(current) + 1) % cycle.length];
         localStorage.setItem('homeOps_State', JSON.stringify(state));
         render();
@@ -174,10 +161,11 @@
     }
 
     function resetData() {
-        if(confirm("Reset history?")) {
+        if(confirm("Reset all history and overrides?")) {
             state = {}; localStorage.removeItem('homeOps_State'); render();
         }
     }
+
     render();
 </script>
 </body>
