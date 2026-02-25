@@ -30,7 +30,7 @@
     </select>
     <button onclick="window.print()">🖨️ Print</button>
     <button onclick="resetData()" style="color: red; border-color: #ffcccc;">Reset All</button>
-    <small style="margin-left: auto; color: #666;">Smart History-Aware Window (T-1 to +12)</small>
+    <small style="margin-left: auto; color: #666;">Rolling Window: Yesterday (T-1) to +12 Days</small>
 </div>
 
 <div id="dashboard"></div>
@@ -69,33 +69,50 @@
 
     function getAutoValue(dateStr, taskName) {
         const d = new Date(dateStr);
+        const dayNum = d.getDay();
         const dateSeed = Math.floor(d.getTime() / 86400000);
         const userA = USERS[dateSeed % 2];
         const userB = USERS[(dateSeed + 1) % 2];
         const task = TASKS.find(t => t.name === taskName);
 
-        // CHILDCARE: Strictly alternating morning/evening shifts
+        // CHILDCARE: Strictly alternating
         if (task.cat === "Childcare") {
             if (taskName === "Evening Lead" || taskName === "Bath & Sleep") return userB;
             return userA; 
         }
 
-        // ROOM LOGIC: Deep clean every 4 days, Simple clean every 2
+        // INITIAL RESET LOGIC: If no history exists, use a staggered day-of-week seed
+        const hasHistory = Object.keys(state).length > 0;
+        if (!hasHistory) {
+            if (task.room) {
+                // Stagger room deep cleans so they don't all hit on Day 1
+                const roomIndex = TASKS.filter(t => t.room).findIndex(t => t.name === taskName);
+                if (dayNum % 7 === roomIndex) return `${userB}-D`;
+                return "";
+            }
+            if (task.freq > 0) return (dayNum % (task.freq + 1) === 0) ? userB : "";
+        }
+
+        // SMART ROOM LOGIC: Deep clean every 4 days, Simple clean every 2
         if (task.room) {
             const hist = getHistory(d, taskName, 7);
-            if (!hist || hist.val.includes('-D') && hist.age > 4) return `${userB}-D`;
-            if (hist && hist.val.includes('-D') && hist.age >= 2 && getHistory(d, taskName, 2) === null) return userB;
+            // If no deep clean in 4 days -> Deep
+            if (!hist || (hist.val.includes('-D') && hist.age > 4)) return `${userB}-D`;
+            // If was deep cleaned but no touch in 2 days -> Simple
+            if (hist && hist.val.includes('-D') && hist.age >= 2) {
+                const recentAny = getHistory(d, taskName, 1);
+                if (!recentAny) return userB;
+            }
             return "";
         }
 
         // HOUSE CHORES: Frequency based
         let targetFreq = task.freq;
-        if (taskName === "Plants" && season === "hot") targetFreq = 0; // Daily in summer
+        if (taskName === "Plants" && season === "hot") targetFreq = 0;
         
         const hist = getHistory(d, taskName, 7);
         if (!hist || hist.age > targetFreq) {
-            // Garbage schedule constraint (Taiwan)
-            if (taskName === "Garbage" && [0, 3].includes(d.getDay())) return "";
+            if (taskName === "Garbage" && [0, 3].includes(dayNum)) return ""; // Taiwan Sun/Wed no garbage
             return userB;
         }
 
@@ -155,7 +172,7 @@
     }
 
     function resetData() {
-        if(confirm("Reset history?")) {
+        if(confirm("Reset history? This will use a staggered start for the first few days.")) {
             state = {}; localStorage.removeItem('homeOps_State'); render();
         }
     }
